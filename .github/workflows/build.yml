@@ -29,6 +29,8 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          validate-wrappers: false
 
       - name: Tentukan nama rilis
         run: echo "TAG=build-$(date -u +%Y%m%d)-${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
