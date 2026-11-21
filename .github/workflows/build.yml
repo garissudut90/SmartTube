@@ -5,7 +5,7 @@ on:
     branches:
       - master
     paths-ignore:
-      - "**.md"
+      - '**.md'
   workflow_dispatch:
 
 permissions:
@@ -43,27 +43,37 @@ jobs:
       - name: Siapkan keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-        run: echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+        run: echo "$KEYSTORE_BASE64" | tr -d '\r\n ' | base64 -d > "$RUNNER_TEMP/release.jks"
 
-      - name: Align dan tanda tangani APK
+      - name: Align dan tanda tangani semua APK
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set -e
-          APK=$(find smarttubetv/build/outputs/apk -name '*.apk' -path '*ststable*' -path '*release*' | head -n 1)
-          echo "APK ditemukan: $APK"
+          KS="$RUNNER_TEMP/release.jks"
+          ALIAS=$(keytool -list -keystore "$KS" -storepass "$KEYSTORE_PASSWORD" 2>/dev/null | awk -F', ' '/PrivateKeyEntry/ {print $1; exit}')
+          if [ -z "$ALIAS" ]; then
+            echo "Keystore tidak berisi private key (PrivateKeyEntry)."
+            keytool -list -keystore "$KS" -storepass "$KEYSTORE_PASSWORD" || true
+            exit 1
+          fi
           BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
-          "$BT/zipalign" -p -f 4 "$APK" "$RUNNER_TEMP/aligned.apk"
-          "$BT/apksigner" sign \
-            --ks "$RUNNER_TEMP/release.jks" \
-            --ks-key-alias "$KEY_ALIAS" \
-            --ks-pass env:KEYSTORE_PASSWORD \
-            --key-pass env:KEY_PASSWORD \
-            --out "smarttube-${TAG}.apk" \
-            "$RUNNER_TEMP/aligned.apk"
-          "$BT/apksigner" verify --print-certs "smarttube-${TAG}.apk"
+          mkdir -p release-apks
+          find smarttubetv/build/outputs/apk -name '*.apk' -path '*ststable*' -path '*release*' | while read -r APK; do
+            NAME=$(basename "$APK")
+            echo "Menandatangani $NAME"
+            "$BT/zipalign" -p -f 4 "$APK" "$RUNNER_TEMP/aligned.apk"
+            "$BT/apksigner" sign \
+              --ks "$KS" \
+              --ks-key-alias "$ALIAS" \
+              --ks-pass env:KEYSTORE_PASSWORD \
+              --key-pass env:KEY_PASSWORD \
+              --out "release-apks/$NAME" \
+              "$RUNNER_TEMP/aligned.apk"
+            "$BT/apksigner" verify "release-apks/$NAME"
+          done
+          ls -la release-apks/*.apk
 
       - name: Upload ke GitHub Release
         uses: softprops/action-gh-release@v2
@@ -71,5 +81,5 @@ jobs:
           tag_name: ${{ env.TAG }}
           name: SmartTube ${{ env.TAG }}
           target_commitish: ${{ github.sha }}
-          files: smarttube-${{ env.TAG }}.apk
+          files: release-apks/*.apk
           generate_release_notes: true
